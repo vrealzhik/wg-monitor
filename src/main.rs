@@ -1,115 +1,11 @@
-use std::{sync::Arc, thread};
+use std::thread;
 
 use gtk::glib::{self, Priority};
-use serde::Deserialize;
 use std::error::Error;
 use tray_icon::{
-    Icon, TrayIcon, TrayIconBuilder, TrayIconEvent,
+    Icon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
-
-// #[derive(Deserialize)]
-// struct WireGuardStatus {
-//     name: String,
-//     interface: String,
-//     public_key: Option<String>,
-//     listen_port: Option<u16>,
-//     peers: Option<Vec<PeerStatus>>,
-// }
-
-// #[derive(Deserialize)]
-// struct PeerStatus {
-//     public_key: String,
-//     endpoint: Option<String>,
-//     allowed_ids: Option<Vec<String>>,
-//     latest_handshake: Option<String>,
-//     transfer_rx: Option<u64>,
-//     transfer_tx: Option<u64>,
-//     persistent_keepalive: Option<u16>,
-// }
-
-// struct AppState {
-//     status_item: MenuItem,
-//     tray_icon: Arc<Mutex<Option<TrayIcon>>>,
-// }
-
-// impl AppState {
-//     fn new(status_item: MenuItem, tray_icon: TrayIcon) -> Self {
-//         Self {
-//             status_item,
-//             tray_icon: Arc::new(Mutex::new(Some(tray_icon))),
-//         }
-//     }
-
-//     async fn update_icon(
-//         &self,
-//         status: ConnectionStatus,
-//     ) -> Result<(), Box<dyn Error + Send + Sync>> {
-//         let tray_guard = self.tray_icon.lock().await;
-//         if let Some(tray) = tray_guard.as_ref() {
-//             let icon = create_colored_icon(status.clone()).unwrap();
-//             tray.set_icon(Some(icon))?;
-
-//             self.status_item
-//                 .set_text(format!("Статус: {}", status.as_text()));
-//         }
-
-//         Ok(())
-//     }
-
-//     async fn monitor_loop(&self) {
-//         let mut interval = time::interval(time::Duration::from_secs(2));
-
-//         loop {
-//             interval.tick().await;
-
-//             match check_wireguard_status() {
-//                 Ok(status) => {
-//                     if let Err(e) = self.update_icon(status).await {
-//                         eprintln!("Ошибка обновления иконкиЖ {}", e);
-//                     }
-//                 }
-//                 Err(e) => {
-//                     eprintln!("Ошибка проверки статуса: {}", e);
-//                     if let Err(e) = self.update_icon(ConnectionStatus::Error).await {
-//                         eprintln!("Ошибка обновления иконки: {}", e);
-//                     }
-//                 }
-//             }
-//         }
-//     }
-// }
-
-// fn check_wireguard_status() -> Result<ConnectionStatus, Box<dyn Error + Send + Sync>> {
-//     let output = std::process::Command::new("wg")
-//         .arg("show")
-//         .output()?;
-
-//     if !output.status.success() {
-//         return Ok(ConnectionStatus::Error);
-//     }
-
-//     let statuses: Vec<WireGuardStatus> = match serde_json::from_slice(&output.stdout) {
-//         Ok(s) => s,
-//         Err(_) => return Ok(ConnectionStatus::Error),
-//     };
-
-//     if statuses.is_empty() {
-//         return Ok(ConnectionStatus::Disconnected);
-//     }
-
-//     if let Some(iface) = statuses.first() {
-//         if let Some(peers) = &iface.peers {
-//             for peer in peers {
-//                 if peer.latest_handshake.is_some() {
-//                     return Ok(ConnectionStatus::Connected);
-//                 }
-//             }
-//         }
-//     }
-
-//     Ok(ConnectionStatus::Disconnected)
-// }
 
 fn check_wireguard_status() -> Result<ConnectionStatus, Box<dyn Error>> {
     let output = std::process::Command::new("sudo")
