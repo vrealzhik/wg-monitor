@@ -1,4 +1,4 @@
-use std::thread;
+use std::{env, thread};
 
 use gtk::glib::{self, Priority};
 use std::error::Error;
@@ -7,57 +7,8 @@ use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
-fn check_wireguard_status() -> Result<ConnectionStatus, Box<dyn Error>> {
-    let output = std::process::Command::new("sudo")
-        .arg("wg")
-        .arg("show")
-        .output()?;
-
-    if !output.status.success() {
-        return Ok(ConnectionStatus::Error);
-    }
-
-    let s = String::from_utf8_lossy(&output.stdout);
-    let lines: Vec<&str> = s.lines().map(|l| l.trim()).collect();
-
-    let mut has_interface = false;
-    let mut has_handshake = false;
-
-    let mut i = 0;
-    while i < lines.len() {
-        if lines[i].starts_with("interface:") {
-            has_interface = true;
-            i += 1;
-            while i < lines.len()
-                && !lines[i].starts_with("interface:")
-                && !lines[i].starts_with("peer:")
-            {
-                i += 1;
-            }
-        } else if lines[i].starts_with("peer:") {
-            i += 1;
-            while i < lines.len()
-                && !lines[i].starts_with("peer:")
-                && !lines[i].starts_with("interface:")
-            {
-                if lines[i].starts_with("latest handshake:") {
-                    has_handshake = true;
-                }
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    if !has_interface {
-        Ok(ConnectionStatus::Disconnected)
-    } else if has_handshake {
-        Ok(ConnectionStatus::Connected)
-    } else {
-        Ok(ConnectionStatus::Disconnected)
-    }
-}
+const CHECK_WG_STATUS_S: u64 = 1;
+const CHECK_WIN_FOCUS_MS: u64 = 500;
 
 #[derive(Clone)]
 enum ConnectionStatus {
@@ -112,13 +63,123 @@ fn create_colored_icon(status: ConnectionStatus) -> Result<Icon, Box<dyn Error>>
     Ok(Icon::from_rgba(rgba, size as u32, size as u32)?)
 }
 
+fn check_wireguard_status() -> Result<ConnectionStatus, Box<dyn Error>> {
+    let output = std::process::Command::new("sudo")
+        .arg("wg")
+        .arg("show")
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(ConnectionStatus::Error);
+    }
+
+    let s = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = s.lines().map(|l| l.trim()).collect();
+
+    let mut has_interface = false;
+    let mut has_handshake = false;
+
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].starts_with("interface:") {
+            has_interface = true;
+            i += 1;
+            while i < lines.len()
+                && !lines[i].starts_with("interface:")
+                && !lines[i].starts_with("peer:")
+            {
+                i += 1;
+            }
+        } else if lines[i].starts_with("peer:") {
+            i += 1;
+            while i < lines.len()
+                && !lines[i].starts_with("peer:")
+                && !lines[i].starts_with("interface:")
+            {
+                if lines[i].starts_with("latest handshake:") {
+                    has_handshake = true;
+                }
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    if !has_interface {
+        Ok(ConnectionStatus::Disconnected)
+    } else if has_handshake {
+        Ok(ConnectionStatus::Connected)
+    } else {
+        Ok(ConnectionStatus::Disconnected)
+    }
+}
+
+fn get_active_window_class() -> Option<String> {
+    let root = std::process::Command::new("xprop")
+        .args(["-root", "_NET_ACTIVE_WINDOW"])
+        .output()
+        .ok()?;
+
+    if !root.status.success() {
+        return None;
+    }
+
+    let root_str = String::from_utf8_lossy(&root.stdout);
+    let id = root_str.split_whitespace().last()?.trim_end_matches(',');
+
+    let class_out = std::process::Command::new("xprop")
+        .args(["-id", id, "-notype", "WM_CLASS"])
+        .output()
+        .ok()?;
+
+    if !class_out.status.success() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&class_out.stdout);
+
+    if let Some(start) = s.find('"') {
+        let rest = &s[start..];
+        if let Some(end) = rest.rfind('"') {
+            return Some(rest[1..end].to_lowercase());
+        }
+    }
+    None
+}
+
+fn run_vpn_command(cmd: &str, wg_config: &str) {
+    let _ = std::process::Command::new("sudo")
+        .arg("wg-quick")
+        .arg(cmd)
+        .arg(wg_config)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+fn is_yandex_focused() -> bool {
+    get_active_window_class().map_or(false, |c| c.contains("yandex"))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     gtk::init().expect("Failed to initialize GTK");
 
+    let wg_config: String = if let Ok(conf) = env::var("WG_CONFIG") {
+        conf
+    } else {
+        String::default()
+    };
+
+    println!("Your wg_config: {:?}", wg_config);
+
     let tray_menu = Menu::new();
+
     let status_item = MenuItem::new("Статус: Проверка...", false, None);
     tray_menu.append_items(&[&status_item])?;
+
     tray_menu.append_items(&[&PredefinedMenuItem::separator()])?;
+
     let quit_item = MenuItem::new("Выход", true, None);
     tray_menu.append_items(&[&quit_item])?;
 
@@ -145,10 +206,28 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     thread::spawn(move || {
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_secs(CHECK_WG_STATUS_S));
             let status = check_wireguard_status().unwrap_or(ConnectionStatus::Error);
             if sender.send(status).is_err() {
                 break;
+            }
+        }
+    });
+
+    let wg_conf_clone = wg_config.clone();
+    thread::spawn(move || {
+        let mut was_yandex = false;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(CHECK_WIN_FOCUS_MS));
+            let now_yandex = is_yandex_focused();
+
+            if now_yandex != was_yandex {
+                if now_yandex {
+                    run_vpn_command("down", &wg_conf_clone);
+                } else {
+                    run_vpn_command("up", &wg_conf_clone);
+                }
+                was_yandex = now_yandex;
             }
         }
     });
