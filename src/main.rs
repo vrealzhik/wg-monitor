@@ -52,7 +52,7 @@ fn create_colored_icon(status: ConnectionStatus) -> Result<Icon, Box<dyn Error>>
             if distance <= radius - 1.0 {
                 rgba.extend_from_slice(&color);
             } else if distance <= radius {
-                let alpha = (radius - distance).max(0.0).min(1.0);
+                let alpha = (radius - distance).clamp(0.0, 1.0);
                 rgba.extend_from_slice(&[color[0], color[1], color[2], (alpha * 255.0) as u8])
             } else {
                 rgba.extend_from_slice(&[0, 0, 0, 0]);
@@ -159,17 +159,13 @@ fn run_vpn_command(cmd: &str, wg_config: &str) {
 }
 
 fn is_yandex_focused() -> bool {
-    get_active_window_class().map_or(false, |c| c.contains("yandex"))
+    get_active_window_class().is_some_and(|c| c.contains("yandex"))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     gtk::init().expect("Failed to initialize GTK");
 
-    let wg_config: String = if let Ok(conf) = env::var("WG_CONFIG") {
-        conf
-    } else {
-        String::default()
-    };
+    let wg_config: String = env::var("WG_CONFIG").unwrap_or_default();
 
     println!("Your wg_config: {:?}", wg_config);
 
