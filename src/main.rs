@@ -1,11 +1,13 @@
 use std::{env, thread};
 
-use gtk::glib::{self, Priority};
+use gtk::glib::MainContext;
 use std::error::Error;
 use tray_icon::{
     Icon, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
+
+use active_win_pos_rs::get_active_window;
 
 const CHECK_WG_STATUS_S: u64 = 1;
 const CHECK_WIN_FOCUS_MS: u64 = 500;
@@ -116,36 +118,10 @@ fn check_wireguard_status() -> Result<ConnectionStatus, Box<dyn Error>> {
 }
 
 fn get_active_window_class() -> Option<String> {
-    let root = std::process::Command::new("xprop")
-        .args(["-root", "_NET_ACTIVE_WINDOW"])
-        .output()
-        .ok()?;
-
-    if !root.status.success() {
-        return None;
+    match get_active_window() {
+        Ok(active_window) => Some(active_window.app_name.to_lowercase()),
+        Err(()) => None,
     }
-
-    let root_str = String::from_utf8_lossy(&root.stdout);
-    let id = root_str.split_whitespace().last()?.trim_end_matches(',');
-
-    let class_out = std::process::Command::new("xprop")
-        .args(["-id", id, "-notype", "WM_CLASS"])
-        .output()
-        .ok()?;
-
-    if !class_out.status.success() {
-        return None;
-    }
-
-    let s = String::from_utf8_lossy(&class_out.stdout);
-
-    if let Some(start) = s.find('"') {
-        let rest = &s[start..];
-        if let Some(end) = rest.rfind('"') {
-            return Some(rest[1..end].to_lowercase());
-        }
-    }
-    None
 }
 
 fn run_vpn_command(cmd: &str, wg_config: &str) {
@@ -186,25 +162,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_icon(initial_icon)
         .build()?;
 
-    let (sender, receiver) = glib::MainContext::channel(Priority::DEFAULT);
+    let (sender, receiver): (
+        async_channel::Sender<ConnectionStatus>,
+        async_channel::Receiver<ConnectionStatus>,
+    ) = async_channel::unbounded();
 
     let tray_icon_clone = tray_icon.clone();
     let status_item_clone = status_item.clone();
 
-    receiver.attach(None, move |status: ConnectionStatus| {
-        let icon = create_colored_icon(status.clone()).unwrap();
-        if let Err(e) = tray_icon_clone.set_icon(Some(icon)) {
-            eprintln!("Ошибка обновления иконки: {}", e);
+    let main_context = MainContext::default();
+    main_context.spawn_local(async move {
+        while let Ok(status) = receiver.recv().await {
+            let icon = create_colored_icon(status.clone()).unwrap();
+            if let Err(e) = tray_icon_clone.set_icon(Some(icon)) {
+                eprintln!("Ошибка обновления иконки: {}", e);
+            }
+            status_item_clone.set_text(format!("Статус: {}", status.as_text()));
         }
-        status_item_clone.set_text(format!("Статус: {}", status.as_text()));
-        glib::ControlFlow::Continue
     });
 
     thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(CHECK_WG_STATUS_S));
             let status = check_wireguard_status().unwrap_or(ConnectionStatus::Error);
-            if sender.send(status).is_err() {
+            if sender.send_blocking(status).is_err() {
                 break;
             }
         }

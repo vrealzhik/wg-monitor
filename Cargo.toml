@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 gtk = "0.18.2"
-tray-icon = "0.21.3"
+tray-icon = "0.24.0"
+active-win-pos-rs = "0.10"
+async-channel = "2.5.0"
